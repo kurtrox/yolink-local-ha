@@ -97,10 +97,17 @@ class YoLocalWaterFlowBinarySensor(YoLocalEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return True while water is flowing."""
-        water_flow = _state_dict(self.device_state).get("waterFlowing")
+        """Return True while water is flowing.
+
+        Protocol docs define ``state.waterFlowing`` as a boolean, but some
+        firmware versions report 0/1 or strings, so accept all encodings.
+        """
+        nested = _state_dict(self.device_state)
+        water_flow = nested.get("waterFlowing")
         if water_flow is None:
             return None
+        if isinstance(water_flow, str):
+            return water_flow.strip().lower() in ("1", "true", "yes", "on")
         return bool(water_flow)
 
 

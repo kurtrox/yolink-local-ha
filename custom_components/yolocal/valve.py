@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.components.valve import (
@@ -16,6 +17,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import YoLocalCoordinator
 from .entity import YoLocalEntity
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -50,16 +53,27 @@ class YoLocalValve(YoLocalEntity, ValveEntity):
     def is_closed(self) -> bool | None:
         """Return True if the valve is closed.
 
-        WaterMeterController reports ``state.valve`` as "open" or "close".
+        WaterMeterController reports ``state.valve`` as "open" or "close"
+        per the protocol docs, but some firmware versions report booleans
+        or numbers, so accept all common encodings.
         """
-        state = self.device_state.get("state")
-        if isinstance(state, dict):
-            valve = state.get("valve")
-        else:
-            valve = state
+        state = self.device_state
+        nested = state.get("state")
+        valve = nested.get("valve") if isinstance(nested, dict) else state.get("valve")
         if valve is None:
             return None
-        return valve == "close"
+        if isinstance(valve, str):
+            v = valve.strip().lower()
+            if v in ("open", "close", "closed"):
+                return v in ("close", "closed")
+            if v in ("0", "1"):
+                return v == "0"
+        elif isinstance(valve, bool):
+            return not valve
+        elif isinstance(valve, (int, float)):
+            return valve == 0
+        _LOGGER.warning("Unrecognized valve state for %s: %r", self._device.name, valve)
+        return None
 
     async def async_open_valve(self, **kwargs: Any) -> None:
         """Open the valve."""

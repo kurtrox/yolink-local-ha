@@ -98,6 +98,12 @@ class YoLocalCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             try:
                 state = await self._client.get_state(device)
                 self._states[device.device_id] = state
+                _LOGGER.debug(
+                    "HTTP state for %s (%s): %s",
+                    device.name,
+                    device.device_type,
+                    state,
+                )
             except Exception:
                 _LOGGER.warning("Failed to get state for %s", device.name)
                 self._states.setdefault(device.device_id, {})
@@ -153,6 +159,7 @@ class YoLocalCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         existing = self._states.get(device_id, {})
         self._states[device_id] = _deep_merge_state(existing, event.data)
+        _LOGGER.debug("MQTT event for %s: %s", device_id, event.data)
         self.async_set_updated_data(self._states.copy())
 
     def get_state(self, device_id: str) -> dict[str, Any]:
