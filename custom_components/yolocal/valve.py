@@ -42,6 +42,7 @@ class YoLocalValve(YoLocalEntity, ValveEntity):
 
     _attr_device_class = ValveDeviceClass.WATER
     _attr_name = "Valve"
+    _attr_reports_position = False  # Only open/closed, no 0-100 position
     _attr_supported_features = ValveEntityFeature.OPEN | ValveEntityFeature.CLOSE
 
     def __init__(self, coordinator: YoLocalCoordinator, device) -> None:
