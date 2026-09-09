@@ -14,7 +14,7 @@ from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, WATER_METER_UNITS
+from .const import DOMAIN
 from .coordinator import YoLocalCoordinator
 from .entity import YoLocalEntity
 
@@ -48,7 +48,6 @@ async def async_setup_entry(
             entities.append(YoLocalBatterySensor(coordinator, device))
         elif device.device_type == "WaterMeterController":
             entities.append(YoLocalWaterMeterSensor(coordinator, device))
-            entities.append(YoLocalWaterMeterTemperatureSensor(coordinator, device))
             entities.append(YoLocalBatterySensor(coordinator, device))
 
     async_add_entities(entities)
@@ -120,11 +119,17 @@ class YoLocalBatterySensor(YoLocalEntity, SensorEntity):
 
 
 class YoLocalWaterMeterSensor(YoLocalEntity, SensorEntity):
-    """Cumulative water consumption sensor for the YoLink water meter controller."""
+    """Cumulative water consumption sensor for the YoLink water meter controller.
 
-    _attr_device_class = SensorDeviceClass.WATER
+    Exposes the raw ``state.meter`` value exactly as the local hub API
+    reports it, with no unit conversion. The value is in whatever unit the
+    meter is configured for (see ``attributes.meterUnit``); users who want a
+    specific display unit can build a template/conversion sensor in Home
+    Assistant on top of this raw value.
+    """
+
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
-    _attr_name = "Water consumption"
+    _attr_name = "Water meter"
 
     def __init__(self, coordinator: YoLocalCoordinator, device) -> None:
         """Initialize the sensor."""
@@ -132,39 +137,10 @@ class YoLocalWaterMeterSensor(YoLocalEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_water_meter"
 
     @property
-    def native_unit_of_measurement(self) -> str | None:
-        """Return the meter's configured volume unit (GAL/CCF/M3/L)."""
-        attributes = self.device_state.get("attributes", {})
-        meter_unit = attributes.get("meterUnit")
-        return WATER_METER_UNITS.get(meter_unit)
-
-    @property
     def native_value(self) -> float | None:
-        """Return the cumulative meter reading in the meter's configured unit."""
+        """Return the raw cumulative meter reading from the local API."""
         meter = _state_value(self.device_state, "meter")
         if meter is None:
             return None
         return float(meter)
-
-
-class YoLocalWaterMeterTemperatureSensor(YoLocalEntity, SensorEntity):
-    """Water temperature sensor for the YoLink water meter controller."""
-
-    _attr_device_class = SensorDeviceClass.TEMPERATURE
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-    _attr_name = "Water temperature"
-
-    def __init__(self, coordinator: YoLocalCoordinator, device) -> None:
-        """Initialize the sensor."""
-        super().__init__(coordinator, device)
-        self._attr_unique_id = f"{device.device_id}_water_temperature"
-
-    @property
-    def native_value(self) -> float | None:
-        """Return the water temperature."""
-        temp = self.device_state.get("temperature")
-        if temp is None:
-            return None
-        return float(temp)
 

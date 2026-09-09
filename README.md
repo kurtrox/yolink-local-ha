@@ -37,7 +37,7 @@ The YoLink Local Hub supports both Matter and a native Local API. While Matter w
 | Outlet | Switch | On/off control |
 | Lock | Lock | Lock/unlock control |
 | Siren | Siren | Trigger/stop alarm |
-| WaterMeterController | Sensor | Cumulative water usage (in the meter's unit), water temperature, battery |
+| WaterMeterController | Sensor | Cumulative water usage (raw API value, in the meter's configured unit), battery |
 | WaterMeterController | Binary Sensor | Water flowing, leak detected |
 | WaterMeterController | Valve | Open/close the water valve |
 
