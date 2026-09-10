@@ -37,8 +37,8 @@ The YoLink Local Hub supports both Matter and a native Local API. While Matter w
 | Outlet | Switch | On/off control |
 | Lock | Lock | Lock/unlock control |
 | Siren | Siren | Trigger/stop alarm |
-| WaterMeterController | Sensor | Calibrated water usage in gallons (see calibration below), battery |
-| WaterMeterController | Binary Sensor | Leak detected |
+| WaterMeterController | Sensor | Water usage (gallons), water temperature, battery |
+| WaterMeterController | Binary Sensor | Water flowing, leak, valve error, freeze error, overrun amount, overrun duration, valve left open, reminder |
 | WaterMeterController | Valve | Open/close the water valve |
 
 Additional device types can be added — contributions welcome!
@@ -115,33 +115,38 @@ You'll need four pieces of information from the YoLink app:
 - **Real-time Updates**: MQTT subscription receives instant state changes (door opens, temperature changes, etc.)
 - **Commands**: Lock/unlock, on/off, and other commands are sent via HTTP
 
-## Water Meter Calibration
+## Water Meter Reading
 
-The local hub reports the water meter's reading as a raw pulse count — it does
-not tell you how many gallons that is. You calibrate it once against the
-physical meter face, and the **Water usage** sensor then reports real gallons.
+The local hub reports the water meter as a raw pulse count in
+``state.meter``. The integration converts it to a real volume:
 
-1. Read the current volume on the meter face (e.g. `12.5`).
-2. Find the meter's `device_id` — it's the `device_id` attribute on the
-   Water usage sensor (or any entity from that device).
-3. Call the service:
+1. **Automatically** (preferred) — using the meter's own attributes
+   ``meterStepFactor`` and ``meterUnit`` (0=GAL, 1=CCF, 2=M3, 3=L), exactly
+   as the YoLink app does: ``volume = raw × meterStepFactor ÷ 1000``. The
+   **Water usage** sensor's unit follows the meter's configured unit.
+2. **Manual calibration** (fallback) — if your firmware doesn't send
+   ``meterStepFactor``, set a baseline against the physical meter face:
 
    ```yaml
    service: yolocal.set_water_meter_calibration
    data:
-     device_id: "d88b4c01000d987c"
-     gallons: 12.5
-     # optional: gallons per pulse, defaults to 0.001
+     device_id: "d88b4c01000d987c"   # device_id attr of the meter sensor
+     gallons: 12.5                    # volume on the meter face now
+     # optional, defaults to 0.001 (volume per raw pulse unit)
      scale: 0.001
+     # optional display unit, defaults to the meter's own unit
+     unit: "gal"
    ```
 
-From then on the sensor shows `baseline_gallons + (raw_now − baseline_raw) ×
-scale`. The raw pulse count is always available as the `raw_meter` attribute.
+   The sensor then shows `baseline + (raw_now − baseline_raw) × scale`.
 
-**Finding the right `scale`:** run a flow test — open the valve for a known
+The raw pulse count is always available as the `raw_meter` attribute, and the
+`reading_source` attribute tells you whether the value came from
+`meterStepFactor` or from your calibration.
+
+**Finding the right `scale` (manual fallback):** open the valve for a known
 volume (e.g. fill a 5-gallon bucket), note the change in `raw_meter`, and set
-`scale = gallons_used ÷ raw_change`. Re-run the service with the corrected
-scale.
+`scale = volume_used ÷ raw_change`. Re-run the service with the corrected scale.
 
 ## Troubleshooting
 

@@ -18,6 +18,7 @@ from .const import (
     CONF_HUB_IP,
     CONF_NET_ID,
     CONF_SCALE,
+    CONF_UNIT,
     DEFAULT_GALLONS_PER_PULSE,
     DEFAULT_HTTP_PORT,
     DEFAULT_MQTT_PORT,
@@ -34,6 +35,7 @@ SERVICE_SET_METER_CALIBRATION_SCHEMA = vol.Schema(
         vol.Required(CONF_DEVICE_ID): cv.string,
         vol.Required(CONF_GALLONS): vol.Coerce(float),
         vol.Optional(CONF_SCALE, default=DEFAULT_GALLONS_PER_PULSE): vol.Coerce(float),
+        vol.Optional(CONF_UNIT): cv.string,
     }
 )
 
@@ -109,11 +111,13 @@ def _async_register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
             device_id,
             gallons=call.data[CONF_GALLONS],
             scale=call.data.get(CONF_SCALE),
+            unit=call.data.get(CONF_UNIT),
         )
         _LOGGER.info(
-            "Calibrated water meter %s to %.3f gallons (scale %s)",
+            "Calibrated water meter %s to %.3f %s (scale %s)",
             device_id,
-            record["gallons"],
+            record["vol"],
+            record["unit"],
             record["scale"],
         )
 

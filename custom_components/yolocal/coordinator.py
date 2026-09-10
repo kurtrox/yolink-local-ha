@@ -21,7 +21,10 @@ from .api import (
     YoLinkMQTTClient,
 )
 from .api.auth import AuthenticationError
-from .const import DEFAULT_GALLONS_PER_PULSE
+from .const import (
+    DEFAULT_GALLONS_PER_PULSE,
+    METER_UNIT_TO_UNIT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -113,20 +116,31 @@ class YoLocalCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         return self._calibration.get(device_id, {})
 
     async def set_calibration(
-        self, device_id: str, gallons: float, scale: float | None = None
+        self, device_id: str, gallons: float, scale: float | None = None,
+        unit: str | None = None,
     ) -> dict[str, Any]:
-        """Record a calibration baseline for a water meter device.
+        """Record a manual calibration baseline for a water meter device.
 
         ``gallons`` is the real-world volume shown on the meter face at the
-        moment of calibration; the current raw reading becomes the baseline
-        raw value. ``scale`` (gallons per raw unit) is optional and defaults
-        to :data:`DEFAULT_GALLONS_PER_PULSE`.
+        moment of calibration (stored under ``vol``); the current raw reading
+        becomes the baseline raw value. ``scale`` (volume per raw unit) is
+        optional and defaults to :data:`DEFAULT_GALLONS_PER_PULSE`. ``unit``
+        is the display unit for the baseline (defaults to the meter's own
+        unit, or "gal").
         """
         raw = self._raw_meter(device_id)
+        if not unit:
+            unit_code = self._meter_attributes(device_id).get("meterUnit")
+            unit = (
+                METER_UNIT_TO_UNIT.get(int(unit_code), "gal")
+                if unit_code is not None
+                else "gal"
+            )
         record = {
-            "gallons": round(float(gallons), 3),
+            "vol": round(float(gallons), 3),
             "raw": raw,
             "scale": float(scale) if scale is not None else DEFAULT_GALLONS_PER_PULSE,
+            "unit": unit,
         }
         self._calibration[device_id] = record
         try:
@@ -134,10 +148,8 @@ class YoLocalCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         except Exception:
             _LOGGER.exception("Failed to persist water meter calibration")
         _LOGGER.info(
-            "Water meter calibration set: %s gallons at raw %s, scale %s",
-            record["gallons"],
-            record["raw"],
-            record["scale"],
+            "Water meter calibration set: %s %s at raw %s, scale %s",
+            record["vol"], record["unit"], record["raw"], record["scale"],
         )
         return record
 
@@ -148,6 +160,69 @@ class YoLocalCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         if isinstance(nested, dict) and "meter" in nested:
             return nested["meter"]
         return state.get("meter")
+
+    def _meter_attributes(self, device_id: str) -> dict[str, Any]:
+        """Return the device's ``attributes`` dict (meterUnit, step factor, ...)."""
+        state = self._states.get(device_id, {})
+        attrs = state.get("attributes")
+        return attrs if isinstance(attrs, dict) else {}
+
+    def get_meter_reading(self, device_id: str) -> dict[str, Any]:
+        """Resolve the water meter's cumulative reading to a real volume.
+
+        Prefers the device's own meter attributes (the canonical conversion
+        the YoLink app uses): ``raw * meterStepFactor / 1000`` in
+        ``meterUnit`` (0=GAL, 1=CCF, 2=M3, 3=L). Falls back to a user-set
+        calibration baseline when ``meterStepFactor`` is absent.
+
+        Returns a dict::
+
+            {"value": <float|None>, "unit": <str|None>,
+             "source": "meterStepFactor" | "calibration" | "none",
+             "raw": <float|None>}
+        """
+        raw = self._raw_meter(device_id)
+        if raw is None:
+            return {"value": None, "unit": None, "source": "none", "raw": None}
+        try:
+            raw = float(raw)
+        except (TypeError, ValueError):
+            return {"value": None, "unit": None, "source": "none", "raw": None}
+
+        attrs = self._meter_attributes(device_id)
+        step = attrs.get("meterStepFactor")
+        unit_code = attrs.get("meterUnit")
+        if step is not None and unit_code is not None:
+            try:
+                unit = METER_UNIT_TO_UNIT.get(int(unit_code), "gal")
+                value = raw * float(step) / 1000.0
+                return {
+                    "value": round(value, 3),
+                    "unit": unit,
+                    "source": "meterStepFactor",
+                    "raw": raw,
+                }
+            except (TypeError, ValueError, KeyError):
+                pass  # fall through to calibration
+
+        cal = self._calibration.get(device_id)
+        if cal and cal.get("raw") is not None:
+            try:
+                base_vol = float(cal["vol"])
+                base_raw = float(cal["raw"])
+                scale = float(cal.get("scale", DEFAULT_GALLONS_PER_PULSE))
+                unit = cal.get("unit") or "gal"
+                value = base_vol + (raw - base_raw) * scale
+                return {
+                    "value": round(value, 3),
+                    "unit": unit,
+                    "source": "calibration",
+                    "raw": raw,
+                }
+            except (KeyError, TypeError, ValueError):
+                pass
+
+        return {"value": None, "unit": None, "source": "none", "raw": raw}
 
     async def _async_setup(self) -> None:
         """Set up the coordinator: fetch devices and connect MQTT."""
