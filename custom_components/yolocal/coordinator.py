@@ -195,7 +195,7 @@ class YoLocalCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         if step is not None and unit_code is not None:
             try:
                 unit = METER_UNIT_TO_UNIT.get(int(unit_code), "gal")
-                value = raw * float(step) / 1000.0
+                value = raw * float(step) / 100.0
                 return {
                     "value": round(value, 3),
                     "unit": unit,
