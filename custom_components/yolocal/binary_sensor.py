@@ -28,18 +28,6 @@ DEVICE_TYPE_TO_ON_STATE = {
 }
 
 
-def _state_dict(state: dict[str, Any]) -> dict[str, Any]:
-    """Return the nested state object for devices that expose one.
-
-    WaterMeterController reports ``state`` as an object (``state.valve``,
-    ``state.waterFlowing``) while other devices report a flat dict.
-    """
-    nested = state.get("state")
-    if isinstance(nested, dict):
-        return nested
-    return state
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -53,7 +41,10 @@ async def async_setup_entry(
         if device.device_type in DEVICE_TYPE_TO_CLASS:
             entities.append(YoLocalBinarySensor(coordinator, device))
         elif device.device_type == "WaterMeterController":
-            entities.append(YoLocalWaterFlowBinarySensor(coordinator, device))
+            # No "water flowing" entity: the YS5008-UC does not report
+            # ``waterFlowing``, and valuing it off the valve position is
+            # misleading (valve open != water currently flowing). Only the
+            # real leak-detector binary sensor is exposed.
             entities.append(YoLocalWaterLeakBinarySensor(coordinator, device))
 
     async_add_entities(entities)
@@ -82,43 +73,6 @@ class YoLocalBinarySensor(YoLocalEntity, BinarySensorEntity):
         if sensor_state is None:
             return None
         return sensor_state == self._on_state
-
-
-class YoLocalWaterFlowBinarySensor(YoLocalEntity, BinarySensorEntity):
-    """Water-flowing binary sensor for the YoLink water meter controller."""
-
-    _attr_device_class = BinarySensorDeviceClass.RUNNING
-    _attr_name = "Water flowing"
-
-    def __init__(self, coordinator: YoLocalCoordinator, device) -> None:
-        """Initialize the sensor."""
-        super().__init__(coordinator, device)
-        self._attr_unique_id = f"{device.device_id}_water_flow"
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return True while water is flowing.
-
-        Protocol docs define ``state.waterFlowing`` as a boolean, but the
-        YS5008-UC (firmware 0608) does not report the field at all. Fall
-        back to the valve position as homebridge-yolink does: valve open
-        means water is considered to be flowing.
-        """
-        nested = _state_dict(self.device_state)
-        water_flow = nested.get("waterFlowing")
-        if water_flow is not None:
-            if isinstance(water_flow, str):
-                return water_flow.strip().lower() in ("1", "true", "yes", "on")
-            return bool(water_flow)
-        # No waterFlowing field (YS5008-UC): use valve state as proxy.
-        valve = nested.get("valve")
-        if isinstance(valve, str):
-            return valve.strip().lower() == "open"
-        if isinstance(valve, bool):
-            return valve
-        if isinstance(valve, (int, float)):
-            return valve == 1
-        return None
 
 
 class YoLocalWaterLeakBinarySensor(YoLocalEntity, BinarySensorEntity):

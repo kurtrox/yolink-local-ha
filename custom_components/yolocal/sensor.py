@@ -10,11 +10,11 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfTemperature
+from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DEFAULT_GALLONS_PER_PULSE, DOMAIN
 from .coordinator import YoLocalCoordinator
 from .entity import YoLocalEntity
 
@@ -119,17 +119,25 @@ class YoLocalBatterySensor(YoLocalEntity, SensorEntity):
 
 
 class YoLocalWaterMeterSensor(YoLocalEntity, SensorEntity):
-    """Cumulative water consumption sensor for the YoLink water meter controller.
+    """Calibrated cumulative water consumption for the YoLink water meter.
 
-    Exposes the raw ``state.meter`` value exactly as the local hub API
-    reports it, with no unit conversion. The value is in whatever unit the
-    meter is configured for (see ``attributes.meterUnit``); users who want a
-    specific display unit can build a template/conversion sensor in Home
-    Assistant on top of this raw value.
+    The local hub reports ``state.meter`` as a raw pulse count — the actual
+    volume is not derivable from the payload alone. The user calibrates the
+    meter by calling ``yolocal.set_water_meter_calibration`` with the real
+    volume shown on the meter face; the integration then reports::
+
+        gallons = baseline_gallons + (raw_now - baseline_raw) * scale
+
+    where ``scale`` is gallons per raw pulse unit (default 0.001). Until a
+    baseline is set the sensor reports *unknown* (the raw pulse count is
+    never mislabeled as gallons); it is always available as the ``raw_meter``
+    state attribute for reference and for running a flow test.
     """
 
+    _attr_name = "Water usage"
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
-    _attr_name = "Water meter"
+    _attr_device_class = SensorDeviceClass.WATER
+    _attr_native_unit_of_measurement = UnitOfVolume.GALLONS
 
     def __init__(self, coordinator: YoLocalCoordinator, device) -> None:
         """Initialize the sensor."""
@@ -137,10 +145,50 @@ class YoLocalWaterMeterSensor(YoLocalEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_water_meter"
 
     @property
-    def native_value(self) -> float | None:
-        """Return the raw cumulative meter reading from the local API."""
+    def _raw(self) -> float | None:
         meter = _state_value(self.device_state, "meter")
         if meter is None:
             return None
-        return float(meter)
+        try:
+            return float(meter)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the calibrated water usage in gallons.
+
+        Returns None (unknown) until the meter has been calibrated via the
+        ``yolocal.set_water_meter_calibration`` service, so the raw pulse
+        count is never presented as a gallon reading.
+        """
+        raw = self._raw
+        if raw is None:
+            return None
+        cal = self.coordinator.get_calibration(self._device.device_id)
+        if not cal or cal.get("raw") is None:
+            return None
+        try:
+            baseline_gallons = float(cal["gallons"])
+            baseline_raw = float(cal["raw"])
+            scale = float(cal.get("scale", DEFAULT_GALLONS_PER_PULSE))
+        except (KeyError, TypeError, ValueError):
+            return None
+        return round(baseline_gallons + (raw - baseline_raw) * scale, 3)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the raw count and calibration metadata."""
+        attrs: dict[str, Any] = {}
+        raw = self._raw
+        if raw is not None:
+            attrs["raw_meter"] = raw
+        cal = self.coordinator.get_calibration(self._device.device_id)
+        if cal:
+            attrs["calibrated_gallons"] = cal.get("gallons")
+            attrs["baseline_raw"] = cal.get("raw")
+            attrs["scale_gallons_per_pulse"] = cal.get(
+                "scale", DEFAULT_GALLONS_PER_PULSE
+            )
+        return attrs
 

@@ -37,8 +37,8 @@ The YoLink Local Hub supports both Matter and a native Local API. While Matter w
 | Outlet | Switch | On/off control |
 | Lock | Lock | Lock/unlock control |
 | Siren | Siren | Trigger/stop alarm |
-| WaterMeterController | Sensor | Cumulative water usage (raw API value, in the meter's configured unit), battery |
-| WaterMeterController | Binary Sensor | Water flowing, leak detected |
+| WaterMeterController | Sensor | Calibrated water usage in gallons (see calibration below), battery |
+| WaterMeterController | Binary Sensor | Leak detected |
 | WaterMeterController | Valve | Open/close the water valve |
 
 Additional device types can be added — contributions welcome!
@@ -114,6 +114,34 @@ You'll need four pieces of information from the YoLink app:
 - **Initial State**: Each device's current state is fetched via HTTP
 - **Real-time Updates**: MQTT subscription receives instant state changes (door opens, temperature changes, etc.)
 - **Commands**: Lock/unlock, on/off, and other commands are sent via HTTP
+
+## Water Meter Calibration
+
+The local hub reports the water meter's reading as a raw pulse count — it does
+not tell you how many gallons that is. You calibrate it once against the
+physical meter face, and the **Water usage** sensor then reports real gallons.
+
+1. Read the current volume on the meter face (e.g. `12.5`).
+2. Find the meter's `device_id` — it's the `device_id` attribute on the
+   Water usage sensor (or any entity from that device).
+3. Call the service:
+
+   ```yaml
+   service: yolocal.set_water_meter_calibration
+   data:
+     device_id: "d88b4c01000d987c"
+     gallons: 12.5
+     # optional: gallons per pulse, defaults to 0.001
+     scale: 0.001
+   ```
+
+From then on the sensor shows `baseline_gallons + (raw_now − baseline_raw) ×
+scale`. The raw pulse count is always available as the `raw_meter` attribute.
+
+**Finding the right `scale`:** run a flow test — open the valve for a known
+volume (e.g. fill a 5-gallon bucket), note the change in `raw_meter`, and set
+`scale = gallons_used ÷ raw_change`. Re-run the service with the corrected
+scale.
 
 ## Troubleshooting
 

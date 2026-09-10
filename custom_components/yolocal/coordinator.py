@@ -10,6 +10,7 @@ from typing import Any
 import aiohttp
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import (
@@ -20,11 +21,16 @@ from .api import (
     YoLinkMQTTClient,
 )
 from .api.auth import AuthenticationError
+from .const import DEFAULT_GALLONS_PER_PULSE
 
 _LOGGER = logging.getLogger(__name__)
 
 # Polling interval as fallback when MQTT events are missed
 UPDATE_INTERVAL = timedelta(minutes=5)
+
+# Storage version for the water meter calibration file.
+_STORAGE_VERSION = 1
+_STORAGE_KEY = "yolocal_calibration"
 
 
 def _deep_merge_state(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
@@ -78,17 +84,77 @@ class YoLocalCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._mqtt_client: YoLinkMQTTClient | None = None
         self._devices: dict[str, Device] = {}
         self._states: dict[str, dict[str, Any]] = {}
+        # Water meter calibration, keyed by device_id. Each entry:
+        #   {"gallons": <real-world gallons at baseline>,
+        #    "raw": <raw meter reading at baseline>,
+        #    "scale": <gallons per raw unit>}
+        self._calibration: dict[str, dict[str, Any]] = {}
+        self._cal_store = Store(
+            hass, _STORAGE_VERSION, f"{_STORAGE_KEY}.json"
+        )
 
     @property
     def devices(self) -> dict[str, Device]:
         """Return the device registry."""
         return self._devices
 
+    async def _load_calibration(self) -> None:
+        """Load persisted water meter calibration from disk."""
+        try:
+            data = await self._cal_store.async_load()
+        except Exception:
+            _LOGGER.debug("No calibration storage to load", exc_info=True)
+            return
+        if isinstance(data, dict):
+            self._calibration = data
+
+    def get_calibration(self, device_id: str) -> dict[str, Any]:
+        """Return the calibration record for a device (empty dict if unset)."""
+        return self._calibration.get(device_id, {})
+
+    async def set_calibration(
+        self, device_id: str, gallons: float, scale: float | None = None
+    ) -> dict[str, Any]:
+        """Record a calibration baseline for a water meter device.
+
+        ``gallons`` is the real-world volume shown on the meter face at the
+        moment of calibration; the current raw reading becomes the baseline
+        raw value. ``scale`` (gallons per raw unit) is optional and defaults
+        to :data:`DEFAULT_GALLONS_PER_PULSE`.
+        """
+        raw = self._raw_meter(device_id)
+        record = {
+            "gallons": round(float(gallons), 3),
+            "raw": raw,
+            "scale": float(scale) if scale is not None else DEFAULT_GALLONS_PER_PULSE,
+        }
+        self._calibration[device_id] = record
+        try:
+            await self._cal_store.async_save(self._calibration)
+        except Exception:
+            _LOGGER.exception("Failed to persist water meter calibration")
+        _LOGGER.info(
+            "Water meter calibration set: %s gallons at raw %s, scale %s",
+            record["gallons"],
+            record["raw"],
+            record["scale"],
+        )
+        return record
+
+    def _raw_meter(self, device_id: str) -> Any:
+        """Return the current raw meter reading for a device."""
+        state = self._states.get(device_id, {})
+        nested = state.get("state")
+        if isinstance(nested, dict) and "meter" in nested:
+            return nested["meter"]
+        return state.get("meter")
+
     async def _async_setup(self) -> None:
         """Set up the coordinator: fetch devices and connect MQTT."""
         devices = await self._client.get_devices()
         self._devices = {d.device_id: d for d in devices}
 
+        await self._load_calibration()
         await self._fetch_all_states()
         await self._connect_mqtt()
 
